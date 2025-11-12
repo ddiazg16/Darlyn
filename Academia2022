@@ -1,0 +1,324 @@
+/*
+================================================================================
+ PROYECTO FINAL MÓDULO III - ACADEMIA 2022
+ Script Completo e Idempotente (DDL, DML, DCL)
+ Implementación de los 9 Criterios Solicitados
+================================================================================
+*/
+
+-- 1. REINICIAR BASE DE DATOS (Idempotencia)
+--------------------------------------------------------------------------------
+IF DB_ID('Academia2022') IS NOT NULL
+BEGIN
+    ALTER DATABASE Academia2022 SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    DROP DATABASE Academia2022;
+END
+GO
+
+CREATE DATABASE Academia2022;
+GO
+USE Academia2022;
+GO
+
+-- 2. CREACIÓN DE ESQUEMAS
+--------------------------------------------------------------------------------
+CREATE SCHEMA Academico;  -- alumnos, cursos, carreras, matrículas
+GO
+CREATE SCHEMA Seguridad;  -- usuarios, roles, auditoría, RLS
+GO
+CREATE SCHEMA App;        -- vistas expuestas a la aplicación (Req 1)
+GO
+CREATE SCHEMA Lab;        -- objetos auxiliares de práctica
+GO
+
+-- 3. CREACIÓN DE TABLAS BASE
+--------------------------------------------------------------------------------
+
+-- Academico.Carreras
+CREATE TABLE Academico.Carreras(
+    CarreraID INT IDENTITY (1,1) CONSTRAINT PK_Carreras PRIMARY KEY,
+    CarreraNombre NVARCHAR(80) NOT NULL CONSTRAINT UQ_Carreras_Nombre UNIQUE,
+);
+
+-- Academico.Contactos (Para normalización)
+CREATE TABLE Academico.Contactos(
+    ContactoID INT IDENTITY(1,1) CONSTRAINT PK_Contactos PRIMARY KEY,
+    Email      NVARCHAR(120) NULL CONSTRAINT UQ_Contactos_Email UNIQUE,
+    Telefono   VARCHAR(20)   NULL
+);
+
+-- Academico.Alumnos
+CREATE TABLE Academico.Alumnos(
+    AlumnoID INT IDENTITY (1,1) CONSTRAINT PK_Alumnos PRIMARY KEY,
+    AlumnoNombre NVARCHAR (60) NOT NULL,
+    AlumnoApellido NVARCHAR (60) NOT NULL,
+    AlumnoEdad TINYINT NOT NULL CONSTRAINT CK_Alumno_Edad CHECK (AlumnoEdad>=16),
+    AlumnoActivo BIT NOT NULL CONSTRAINT DF_Alumno_Activo DEFAULT (1),
+    CarreraID INT NULL, -- FK
+    ContactoID INT NULL  -- FK
+);
+
+-- FKs para Alumnos
+ALTER TABLE Academico.Alumnos
+ADD CONSTRAINT FK_Alumnos_Carreras FOREIGN KEY (CarreraID) 
+REFERENCES Academico.Carreras(CarreraID) ON DELETE SET NULL ON UPDATE NO ACTION;
+
+ALTER TABLE Academico.Alumnos
+ADD CONSTRAINT FK_Alumnos_Contactos FOREIGN KEY (ContactoID) 
+REFERENCES Academico.Contactos(ContactoID);
+
+-- Columna calculada PERSISTED e índice
+ALTER TABLE Academico.Alumnos
+ADD NombreCompleto AS (AlumnoNombre + N' ' + AlumnoApellido) PERSISTED;
+CREATE INDEX IX_Alumnos_NombreCompleto ON Academico.Alumnos(NombreCompleto);
+
+-- Academico.Cursos
+CREATE SEQUENCE Academico.SeqCodigoCurso AS INT START WITH 1000 INCREMENT BY 1;
+CREATE TABLE Academico.Cursos(
+    CursoID INT IDENTITY(1,1) CONSTRAINT PK_Cursos PRIMARY KEY,
+    CursoCodigo INT NOT NULL CONSTRAINT DF_Cursos_CursoCodigo DEFAULT (NEXT VALUE FOR Academico.SeqCodigoCurso),
+    CursoNombre NVARCHAR(100) NOT NULL CONSTRAINT UQ_Cursos_Nombre UNIQUE,
+    CursoCreditosECTS TINYINT NOT NULL CONSTRAINT CK_Cursos_Creditos CHECK (CursoCreditosECTS BETWEEN 1 AND 10) 
+);
+
+-- Academico.Matriculas
+CREATE TABLE Academico.Matriculas(
+    AlumnoID INT NOT NULL,
+    CursoID INT NOT NULL,
+    MatriculaPeriodo CHAR(6) NOT NULL CONSTRAINT CK_Matriculas_Periodo CHECK (MatriculaPeriodo LIKE '[12][0-9][S][12]'),
+    CONSTRAINT PK_Matriculas PRIMARY KEY (AlumnoID, CursoID, MatriculaPeriodo), 
+    CONSTRAINT FK_Matriculas_Alumnos FOREIGN KEY (AlumnoID) 
+        REFERENCES Academico.Alumnos(AlumnoID) ON DELETE CASCADE,
+    CONSTRAINT FK_Matriculas_Cursos FOREIGN KEY (CursoID)
+        REFERENCES Academico.Cursos(CursoID) ON DELETE CASCADE
+);
+GO
+
+-- 4. INSERCIÓN DE DATOS DE PRUEBA (DML)
+--------------------------------------------------------------------------------
+INSERT INTO Academico.Carreras (CarreraNombre) VALUES 
+('Ingeniería de Sistemas'), ('Administración de Empresas'), ('Diseño Gráfico');
+
+INSERT INTO Academico.Contactos (Email, Telefono) VALUES
+('juan.perez@test.com', '555-1001'), 
+('maria.lopez@test.com', '555-1002'), 
+('carlos.ruiz@test.com', '555-1003'),
+('ana.gomez@test.com', '555-1004'),
+('test_rls@test.com', '555-9999'); -- Contacto para usuario de prueba RLS
+
+INSERT INTO Academico.Alumnos (AlumnoNombre, AlumnoApellido, AlumnoEdad, AlumnoActivo, CarreraID, ContactoID) VALUES
+('Juan', 'Perez', 20, 1, 1, 1),
+('Maria', 'Lopez', 22, 1, 2, 2),
+('Carlos', 'Ruiz', 25, 1, 1, 3),
+('Ana', 'Gomez', 18, 0, 3, 4), -- Alumno inactivo
+('Test', 'RLS', 21, 1, 1, 5); -- Alumno de prueba para RLS (ID=5)
+
+INSERT INTO Academico.Cursos (CursoNombre, CursoCreditosECTS) VALUES
+('Bases de Datos I', 6), ('Programación Avanzada', 8), ('Contabilidad', 5),
+('Marketing Digital', 4), ('Cálculo I', 7), ('Diseño Web', 6);
+
+INSERT INTO Academico.Matriculas (AlumnoID, CursoID, MatriculaPeriodo) VALUES
+(1, 1, '24S1'), (1, 2, '24S1'), (1, 5, '24S1'), -- Juan (3 cursos en 24S1)
+(2, 3, '24S1'), (2, 4, '24S1'), -- Maria (2 cursos en 24S1)
+(3, 1, '24S1'), (3, 2, '24S1'), (3, 5, '24S1'), (3, 6, '24S1'), -- Carlos (4 cursos en 24S1)
+(1, 1, '24S2'), (1, 6, '24S2'), -- Juan (2 cursos en 24S2)
+(5, 1, '24S2'), (5, 2, '24S2'), (5, 3, '24S2'); -- Test RLS (3 cursos en 24S2)
+GO
+
+-- 5. IMPLEMENTACIÓN DE REQUISITOS ESPECÍFICOS
+
+-- REQUISITO 1: Diseño de consultas (Vistas con SCHEMABINDING)
+--------------------------------------------------------------------------------
+
+-- Vista 1: Total de Cursos Matriculados por Periodo (COUNT)
+CREATE VIEW App.vw_MatriculasPorPeriodo
+WITH SCHEMABINDING
+AS
+SELECT
+    m.MatriculaPeriodo,
+    COUNT_BIG(*) AS TotalMatriculas, -- Función de Agregación COUNT
+    COUNT(DISTINCT m.AlumnoID) AS TotalAlumnos
+FROM
+    Academico.Matriculas AS m
+GROUP BY
+    m.MatriculaPeriodo; -- Cláusula GROUP BY
+GO
+
+-- Vista 2: Promedio de Edad y Suma de Créditos por Carrera (AVG, SUM)
+CREATE VIEW App.vw_EstadisticasCarrera
+WITH SCHEMABINDING
+AS
+SELECT
+    c.CarreraID,
+    c.CarreraNombre,
+    AVG(a.AlumnoEdad * 1.0) AS EdadPromedio, -- Función de Agregación AVG
+    SUM(cu.CursoCreditosECTS) AS SumaCreditosOfertados -- Función de Agregación SUM
+FROM
+    Academico.Carreras AS c
+INNER JOIN Academico.Alumnos AS a ON c.CarreraID = a.CarreraID
+INNER JOIN Academico.Matriculas AS m ON a.AlumnoID = m.AlumnoID
+INNER JOIN Academico.Cursos AS cu ON m.CursoID = cu.CursoID
+GROUP BY
+    c.CarreraID, c.CarreraNombre; -- Cláusula GROUP BY
+GO
+
+-- REQUISITO 4: Seguridad (Row-Level Security - RLS)
+--------------------------------------------------------------------------------
+-- Se crea un esquema de seguridad para RLS
+CREATE SCHEMA Sec;
+GO
+
+-- Función de Predicado de Filtro RLS: Permite ver la fila si el AlumnoEmail coincide con el nombre de usuario de la sesión.
+CREATE FUNCTION Sec.fn_rls_filter_alumnos(@AlumnoID int)
+RETURNS TABLE
+WITH SCHEMABINDING
+AS
+RETURN (
+    SELECT 1 AS AllowRow
+    FROM Academico.Alumnos a
+    INNER JOIN Academico.Contactos c ON a.ContactoID = c.ContactoID
+    -- La condición clave: El Email del alumno debe coincidir con el nombre de usuario de la sesión
+    WHERE a.AlumnoID = @AlumnoID AND c.Email = SUSER_SNAME()
+    -- O si el usuario es un administrador (db_owner)
+    OR IS_MEMBER('db_owner') = 1
+);
+GO
+
+-- Aplicar la Política de Seguridad a la tabla Academico.Alumnos
+CREATE SECURITY POLICY Seguridad.Policy_RLS_Alumnos
+ADD FILTER PREDICATE Sec.fn_rls_filter_alumnos(AlumnoID)
+ON Academico.Alumnos
+WITH (STATE = ON);
+GO
+
+-- REQUISITO 5: Roles y permisos (AppReader, AppWriter, AuditorDB)
+--------------------------------------------------------------------------------
+
+-- 5.1 Creación de Roles
+CREATE ROLE AppReader;
+CREATE ROLE AppWriter;
+CREATE ROLE AuditorDB;
+
+-- 5.2 Asignación de Privilegios (GRANT)
+
+-- AppReader: Solo lectura en el esquema App (vistas)
+GRANT SELECT ON SCHEMA::App TO AppReader;
+
+-- AppWriter: Lectura y Escritura en tablas Academico (DML)
+GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::Academico TO AppWriter;
+
+-- AuditorDB: Puede ver la tabla de Auditoría y ejecutar SPs de auditoría
+GRANT SELECT ON Seguridad.AuditoriaAccesos TO AuditorDB;
+GRANT EXECUTE ON SCHEMA::Academico TO AuditorDB;
+
+-- 5.3 Revocación de Privilegios (REVOKE)
+-- Revocamos la capacidad de AppWriter de eliminar la tabla de Carreras (DDL)
+REVOKE CONTROL ON Academico.Carreras TO AppWriter;
+GO
+
+-- REQUISITO 6 & 7: Sistema de Auditoría y Procedimientos Almacenados
+--------------------------------------------------------------------------------
+
+-- 6.1 Tabla de Auditoría de Accesos (LOGIN/LOGOUT)
+CREATE TABLE Seguridad.AuditoriaAccesos (
+    AccesoID INT IDENTITY PRIMARY KEY,
+    Usuario NVARCHAR(128) NOT NULL,
+    TipoAcceso NVARCHAR(50) NOT NULL, -- LOGIN, LOGOUT, SP_INICIO, SP_CIERRE
+    FechaHora DATETIME DEFAULT GETDATE()
+);
+GO
+
+-- 7.1 Procedimiento Almacenado: Iniciar Sesión Alumno
+CREATE PROCEDURE Academico.sp_IniciarSesionAlumno (@AlumnoEmail NVARCHAR(120))
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    -- Lógica de negocio simulada
+    IF EXISTS (SELECT 1 FROM Academico.Contactos WHERE Email = @AlumnoEmail)
+    BEGIN
+        PRINT 'SUCCESS: Sesión iniciada correctamente para el alumno con Email: ' + @AlumnoEmail;
+        
+        -- Registro de Auditoría (Inserción automática)
+        INSERT INTO Seguridad.AuditoriaAccesos (Usuario, TipoAcceso)
+        VALUES (@AlumnoEmail, 'SP_INICIO');
+    END
+    ELSE
+    BEGIN
+        PRINT 'ERROR: Alumno no encontrado con Email: ' + @AlumnoEmail;
+    END
+END
+GO
+
+-- 7.2 Procedimiento Almacenado: Cerrar Sesión Alumno
+CREATE PROCEDURE Academico.sp_CerrarSesionAlumno (@AlumnoEmail NVARCHAR(120))
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    PRINT 'Cerrando sesión simulada para: ' + @AlumnoEmail;
+    
+    -- Registro de Auditoría (Inserción automática)
+    INSERT INTO Seguridad.AuditoriaAccesos (Usuario, TipoAcceso)
+    VALUES (@AlumnoEmail, 'SP_CIERRE');
+END
+GO
+
+-- 8. ESTRATEGIA DE BACKUP/RESTAURACIÓN (Verificación)
+--------------------------------------------------------------------------------
+-- Tabla para registrar los backups (similar a msdb.dbo.backupset, para ejercicio)
+CREATE TABLE Seguridad.RegistroBackups (
+    BackupID INT IDENTITY PRIMARY KEY,
+    TipoBackup CHAR(1) NOT NULL, -- F=FULL, D=DIFFERENTIAL
+    FechaHora DATETIME DEFAULT GETDATE(),
+    RutaArchivo NVARCHAR(512)
+);
+GO
+
+-- Nota: Los comandos de BACKUP se deben ejecutar fuera de este script (Ver Guía de Evidencia)
+
+-- 9. CONFIGURACIÓN DE USUARIOS PARA PRUEBAS (DCL)
+--------------------------------------------------------------------------------
+USE master;
+-- Login de prueba para RLS (debe coincidir con el Email de un alumno)
+IF SUSER_ID('test_rls@test.com') IS NOT NULL DROP LOGIN [test_rls@test.com];
+CREATE LOGIN [test_rls@test.com] WITH PASSWORD = 'P@ssw0rd123!', CHECK_POLICY = OFF;
+GO
+
+USE Academia2022;
+-- Usuario de prueba para RLS
+IF USER_ID('test_rls') IS NOT NULL DROP USER test_rls;
+CREATE USER test_rls FOR LOGIN [test_rls@test.com];
+EXEC sp_addrolemember N'db_datareader', N'test_rls'; -- Permiso de lectura básica
+GO
+
+-- Login de prueba para Auditoría y Roles
+IF SUSER_ID('auditor_login') IS NOT NULL DROP LOGIN auditor_login;
+CREATE LOGIN auditor_login WITH PASSWORD = 'P@ssw0rd123!', CHECK_POLICY = OFF;
+GO
+
+IF USER_ID('auditor_user') IS NOT NULL DROP USER auditor_user;
+CREATE USER auditor_user FOR LOGIN auditor_login;
+EXEC sp_addrolemember N'AuditorDB', N'auditor_user'; -- Asignar el rol creado
+GO
+
+-- REQUISITO 6: Configuración de Auditoría de Servidor (Opcional, si se requiere la auditoría nativa)
+-- **DEBES CAMBIAR LA RUTA C:\SQLAudit\ A UNA RUTA VÁLIDA**
+IF EXISTS (SELECT * FROM sys.server_audits WHERE name = 'Audit_Academia')
+    ALTER SERVER AUDIT Audit_Academia WITH (STATE = OFF);
+IF EXISTS (SELECT * FROM sys.server_audits WHERE name = 'Audit_Academia')
+    DROP SERVER AUDIT Audit_Academia;
+
+CREATE SERVER AUDIT Audit_Academia
+TO FILE (FILEPATH = 'C:\SQLAudit\'); -- <--- CAMBIAR RUTA
+ALTER SERVER AUDIT Audit_Academia WITH (STATE = ON);
+
+CREATE DATABASE AUDIT SPECIFICATION Audit_DB_Permisos
+FOR SERVER AUDIT Audit_Academia
+ADD (DATABASE_OBJECT_PERMISSION_CHANGE_GROUP), -- Captura GRANT/REVOKE/DENY
+ADD (FAILED_DATABASE_AUTHENTICATION_GROUP) -- Captura intentos de login fallidos
+WITH (STATE = ON);
+GO
+
+PRINT '--- Script de Academia2022 ejecutado completamente. ---';
+GO
